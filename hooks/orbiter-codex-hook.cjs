@@ -204,12 +204,17 @@ const CRITICAL_PATTERNS = [
   },
   {
     id: 'critical_terraform_destroy',
-    regex: /\b(?:terraform|tofu|pulumi)\s+destroy\b|\bsupabase\s+db\s+reset\b/i,
+    regex: /\b(?:terraform|tofu|pulumi)\s+destroy\b|\bsupabase\s+db\s+reset\b|\bfly(?:ctl)?\s+apps\s+destroy\b/i,
     reason: 'Infrastructure or database destruction command',
   },
   {
+    id: 'critical_docker_destructive',
+    regex: /\b(?:docker|podman|nerdctl)\s+(?:(?:compose\s+)?down\b[\s\S]*\s(?:-v|--volumes)\b|system\s+prune\b[\s\S]*\s(?:-a|--all)\b|volume\s+(?:rm|prune)\b|run\b[\s\S]*\s--privileged\b)/i,
+    reason: 'Destructive container volume wipe, full prune, or privileged container execution',
+  },
+  {
     id: 'critical_git_force_push',
-    regex: /\bgit\s+push\b[\s\S]*(?:--force(?:-with-lease)?|\s-f\b)/i,
+    regex: /\bgit\s+push\b[\s\S]*(?:--force(?:-with-lease|-if-includes)?|\s-f\b)/i,
     reason: 'Force pushing to a Git remote',
   },
   {
@@ -227,37 +232,42 @@ const HIGH_RISK_PATTERNS = [
   },
   {
     id: 'high_kubectl_delete',
-    regex: /\bkubectl\s+(?:delete|apply|patch|replace|scale|rollout)\b/i,
+    regex: /\bkubectl\s+(?:delete|apply|patch|replace|scale|rollout|drain|cordon|taint|exec|edit|create|set)\b/i,
     reason: 'Mutating or deleting Kubernetes cluster resources',
   },
   {
     id: 'high_terraform_apply',
-    regex: /\b(?:terraform|tofu)\s+apply\b/i,
+    regex: /\b(?:terraform|tofu)\s+apply\b|\bpulumi\s+up\b/i,
     reason: 'Infrastructure apply change',
   },
   {
     id: 'high_aws_delete',
-    regex: /\baws\s+[\s\S]*--delete\b|\baws\s+\S+\s+delete-[a-z0-9-]+|\b(?:gcloud|az)\b[\s\S]*\b(?:delete|destroy|remove)\b/i,
-    reason: 'Cloud resource deletion command',
+    regex: /\baws\s+[\s\S]*--delete\b|\baws\s+s3\s+(?:rm|rb)\b|\baws\s+[a-z0-9-]+\s+(?:delete|destroy|terminate|remove|purge|deregister|revoke|wipe|reset)-[a-z0-9-]+|\b(?:gcloud|az)\b[\s\S]*\b(?:delete|destroy|remove|purge|deploy)\b/i,
+    reason: 'Cloud resource deletion or mutation command',
+  },
+  {
+    id: 'high_docker_mutate',
+    regex: /\b(?:docker|podman|nerdctl)\s+(?:rm|rmi|kill|exec|push|compose\s+down|system\s+prune|(?:container|image|network)\s+(?:rm|prune)|buildx\s+build[\s\S]*--push)\b/i,
+    reason: 'Destructive or mutating container/image operation',
   },
   {
     id: 'high_cloud_destroy_or_deploy',
-    regex: /\b(?:helm\s+(?:install|upgrade|rollback|uninstall)|fly\s+apps\s+destroy|(?:wrangler|fly|vercel|railway|netlify)\s+(?:deploy|up|--prod)|supabase\s+db\s+push|prisma\s+(?:migrate\s+deploy|db\s+push))\b/i,
+    regex: /\b(?:helm\s+(?:install|upgrade|rollback|uninstall|delete)|fly(?:ctl)?\s+(?:apps\s+destroy|destroy|deploy)|(?:wrangler|vercel|railway|netlify)\s+(?:deploy|up|--prod)|wrangler\s+d1\s+execute|supabase\s+db\s+push|prisma\s+(?:migrate\s+(?:deploy|reset)|db\s+push)|drizzle-kit\s+(?:push|migrate))\b/i,
     reason: 'Cloud deployment, migration, or uninstall command',
   },
   {
     id: 'high_git_push_or_rewrite',
-    regex: /\bgit\s+(?:push|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D)\b/i,
+    regex: /\bgit\s+(?:push|reset\s+--hard|clean\s+-[a-z]*f|clean\s+--force|branch\s+-D|worktree\s+remove)\b/i,
     reason: 'Git remote push or destructive history/workspace rewrite',
   },
   {
     id: 'high_package_publish',
-    regex: /\b(?:npm|pnpm|yarn|cargo|gem|twine)\s+(?:publish|unpublish|upload|push)\b/i,
+    regex: /\b(?:npm|pnpm|yarn|cargo|gem|twine)\s+(?:npm\s+)?(?:publish|unpublish|deprecate|upload|push)\b/i,
     reason: 'Publishing a package to a registry',
   },
   {
     id: 'high_privilege_or_perms',
-    regex: /\b(?:sudo\b|chmod\s+(?:-R\s+)?777\b|chown\s+-R\b)/i,
+    regex: /\b(?:sudo\b|doas\b|chmod\s+(?:-R\s+)?777\b|chown\s+-R\b)/i,
     reason: 'Privilege escalation or recursive permission change',
   },
   {
@@ -272,15 +282,376 @@ const HIGH_RISK_PATTERNS = [
   },
 ];
 
-const SAFE_READ_ONLY_SHELL_PATTERNS = [
-  /^git\s+(?:status|diff|log|show|rev-parse|describe|remote\s+-v|config\s+--list)(?:\s|$)/i,
-  /^git\s+branch(?:\s+(?:--list|-a|--all|-r|--remotes|-v|--verbose|--show-current))*$/i,
-  /^(?:ls|ll|dir|pwd|whoami|id|uname|date|echo|cat|head|tail|wc|stat|file|which|where|type|rg|ripgrep|grep|egrep|fgrep|fd|tree)(?:\s|$)/i,
-  /^(?:node|npm|npx|pnpm|yarn|python|python3|go|rustc|cargo|git|codex)\s+(?:--version|-v|-V|version)\s*$/i,
-];
+const RISK_ORDER = { low: 0, medium: 1, high: 2, critical: 3 };
 
 const SHELL_CHAIN_OR_REDIRECT_PATTERN = /[;&|`$<>()\r\n\0]/;
-const GIT_UNSAFE_FLAG_PATTERN = /\bgit\b[\s\S]*(?:\s-c\s|\s--output(?:=|\s)|\s--ext-diff\b|\s--exec-path\b)/i;
+
+const CLI_GLOBAL_OPTIONS = {
+  git: {
+    valueFlags: new Set(['-c', '-C', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--exec-path', '--list-cmds']),
+    boolFlags: new Set(['--bare', '--no-pager', '-p', '--paginate', '-P', '--no-replace-objects', '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs', '--no-optional-locks', '--no-lazy-fetch']),
+    attachedShortValueFlags: ['-c', '-C'],
+  },
+  aws: {
+    valueFlags: new Set(['--profile', '--region', '--endpoint-url', '--output', '--color', '--cli-read-timeout', '--cli-connect-timeout', '--cli-input-json', '--cli-input-yaml', '--ca-bundle', '--query']),
+    boolFlags: new Set(['--debug', '--no-verify-ssl', '--no-paginate', '--no-sign-request', '--no-cli-pager']),
+  },
+  gcloud: {
+    valueFlags: new Set(['--project', '--account', '--configuration', '--impersonate-service-account', '--region', '--zone', '--format', '--verbosity', '--billing-project', '--filter', '--sort-by', '--limit', '--page-size']),
+    boolFlags: new Set(['--quiet', '-q', '--no-user-output-enabled', '--log-http']),
+  },
+  az: {
+    valueFlags: new Set(['--subscription', '--output', '-o', '--query']),
+    boolFlags: new Set(['--debug', '--verbose', '--only-show-errors', '--yes', '-y']),
+  },
+  kubectl: {
+    valueFlags: new Set(['--context', '--cluster', '--user', '-n', '--namespace', '--kubeconfig', '--server', '-s', '--token', '--as', '--as-group', '--as-uid', '--certificate-authority', '--client-certificate', '--client-key', '--request-timeout', '--cache-dir', '-v', '--v', '--tls-server-name']),
+    boolFlags: new Set(['--insecure-skip-tls-verify', '-A', '--all-namespaces', '--match-server-version']),
+    attachedShortValueFlags: ['-n', '-s'],
+  },
+  helm: {
+    valueFlags: new Set(['--kube-context', '-n', '--namespace', '--kubeconfig', '--kube-apiserver', '--kube-token', '--kube-as-user', '--kube-as-group', '--kube-ca-file', '--registry-config', '--repository-cache', '--repository-config', '--burst-limit', '--qps']),
+    boolFlags: new Set(['--debug', '--kube-insecure-skip-tls-verify']),
+    attachedShortValueFlags: ['-n'],
+  },
+  docker: {
+    valueFlags: new Set(['-H', '--host', '--context', '-c', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey']),
+    boolFlags: new Set(['-D', '--debug', '--tls', '--tlsverify']),
+    attachedShortValueFlags: ['-H'],
+  },
+  podman: {
+    valueFlags: new Set(['-H', '--host', '--connection', '-c', '--url', '--identity', '--log-level', '--root', '--runroot', '--runtime']),
+    boolFlags: new Set(['--remote', '-r']),
+  },
+  nerdctl: {
+    valueFlags: new Set(['-H', '--host', '-a', '--address', '-n', '--namespace', '--data-root']),
+    boolFlags: new Set(['--debug', '--debug-full']),
+  },
+  terraform: {
+    valueFlags: new Set(['-chdir', '--chdir']),
+    boolFlags: new Set(['-help', '--help', '-version', '--version']),
+  },
+  tofu: {
+    valueFlags: new Set(['-chdir', '--chdir']),
+    boolFlags: new Set(['-help', '--help', '-version', '--version']),
+  },
+  pulumi: {
+    valueFlags: new Set(['-C', '--cwd', '-s', '--stack', '--color', '--profiling', '--tracing', '-v', '--verbose']),
+    boolFlags: new Set(['--emoji', '--logflow', '--logtostderr', '--non-interactive', '-j', '--json']),
+  },
+  npm: {
+    valueFlags: new Set(['--prefix', '-C', '--workspace', '-w', '--registry', '--userconfig', '--cache', '--loglevel', '--otp', '--tag', '--access']),
+    boolFlags: new Set(['--silent', '-s', '--quiet', '-q', '--workspaces', '--ws', '--yes', '-y', '--verbose', '--dd', '--ddd']),
+  },
+  pnpm: {
+    valueFlags: new Set(['-C', '--dir', '--filter', '-F', '--reporter', '--loglevel']),
+    boolFlags: new Set(['--workspace-root', '-w', '--recursive', '-r', '--silent', '-s']),
+  },
+  yarn: {
+    valueFlags: new Set(['--cwd', '--registry']),
+    boolFlags: new Set(['--silent', '-s', '--verbose', '--non-interactive']),
+  },
+  cargo: {
+    valueFlags: new Set(['--manifest-path', '--color', '--config', '-Z', '-C']),
+    boolFlags: new Set(['-q', '--quiet', '-v', '-vv', '--verbose', '--frozen', '--locked', '--offline']),
+    skipPlusToolchain: true,
+  },
+  wrangler: {
+    valueFlags: new Set(['--env', '-e', '--config', '-c', '--cwd', '--env-file']),
+    boolFlags: new Set(['--experimental-remote-bindings', '--local', '--remote']),
+    attachedShortValueFlags: ['-e', '-c'],
+  },
+  fly: {
+    valueFlags: new Set(['-a', '--app', '-c', '--config', '-t', '--access-token', '-o', '--org', '-r', '--region']),
+    boolFlags: new Set(['--verbose', '--debug', '-j', '--json']),
+    attachedShortValueFlags: ['-a'],
+  },
+  flyctl: {
+    valueFlags: new Set(['-a', '--app', '-c', '--config', '-t', '--access-token', '-o', '--org', '-r', '--region']),
+    boolFlags: new Set(['--verbose', '--debug', '-j', '--json']),
+    attachedShortValueFlags: ['-a'],
+  },
+  vercel: {
+    valueFlags: new Set(['--cwd', '--scope', '-S', '--token', '-t', '--local-config', '-A', '--global-config', '-Q']),
+    boolFlags: new Set(['--debug', '-d', '--yes', '-y']),
+  },
+  netlify: {
+    valueFlags: new Set(['--cwd', '--site', '--auth', '--dir', '--filter']),
+    boolFlags: new Set(['--debug']),
+  },
+  railway: {
+    valueFlags: new Set(['--environment', '-e', '--service', '-s']),
+    boolFlags: new Set([]),
+  },
+  supabase: {
+    valueFlags: new Set(['--workdir', '--project-ref', '--profile', '--dns-resolver']),
+    boolFlags: new Set(['--debug', '--yes', '--experimental']),
+  },
+  prisma: {
+    valueFlags: new Set(['--schema', '--config']),
+    boolFlags: new Set([]),
+  },
+};
+
+const VERSION_CHECK_EXECUTABLES = new Set([
+  'node',
+  'npm',
+  'npx',
+  'pnpm',
+  'yarn',
+  'python',
+  'python3',
+  'go',
+  'rustc',
+  'cargo',
+  'git',
+  'codex',
+  'claude',
+  'cursor',
+]);
+
+const VERSION_CHECK_FLAGS = new Set(['--version', '-v', '-V', 'version']);
+
+const READ_ONLY_COMMAND_SPECS = {
+  rg: {
+    shortBool: new Set(['n', 'N', 'H', 'I', 'i', 's', 'S', 'F', 'w', 'x', 'v', 'l', 'c', 'o', 'q', 'a', 'u', 'U', 'P', '.']),
+    longBool: new Set([
+      '--line-number', '--no-line-number', '--with-filename', '--no-filename', '--ignore-case',
+      '--case-sensitive', '--smart-case', '--fixed-strings', '--word-regexp', '--line-regexp',
+      '--invert-match', '--files-with-matches', '--files-without-match', '--files', '--count',
+      '--count-matches', '--only-matching', '--quiet', '--hidden', '--no-ignore', '--no-ignore-vcs',
+      '--no-heading', '--heading', '--vimgrep', '--json', '--stats', '--column', '--no-config',
+      '--text', '--multiline', '--pcre2', '--trim', '--sort-files',
+    ]),
+    valueFlags: new Set([
+      '-e', '--regexp', '-g', '--glob', '--iglob', '-t', '--type', '-T', '--type-not',
+      '-A', '--after-context', '-B', '--before-context', '-C', '--context',
+      '-m', '--max-count', '--max-depth', '--max-filesize', '--color', '--sort', '-j', '--threads',
+    ]),
+    patternArgUnlessFlag: new Set(['-e', '--regexp', '--files']),
+    pathArgs: true,
+  },
+  ripgrep: null,
+  grep: {
+    shortBool: new Set(['n', 'H', 'h', 'i', 'F', 'E', 'G', 'P', 'w', 'x', 'v', 'l', 'L', 'c', 'o', 'q', 'r', 'I', 's']),
+    longBool: new Set([
+      '--line-number', '--with-filename', '--no-filename', '--ignore-case', '--fixed-strings',
+      '--extended-regexp', '--basic-regexp', '--perl-regexp', '--word-regexp', '--line-regexp',
+      '--invert-match', '--files-with-matches', '--files-without-match', '--count', '--only-matching',
+      '--quiet', '--recursive', '--no-messages', '--color',
+    ]),
+    valueFlags: new Set([
+      '-e', '--regexp', '-A', '--after-context', '-B', '--before-context', '-C', '--context',
+      '-m', '--max-count', '--include', '--exclude', '--exclude-dir', '--color',
+    ]),
+    patternArgUnlessFlag: new Set(['-e', '--regexp']),
+    pathArgs: true,
+  },
+  egrep: null,
+  fgrep: null,
+  ls: {
+    shortBool: new Set(['a', 'A', 'l', 'h', '1', 'r', 't', 'S', 'R', 'd', 'F', 'p', 'n', 'i', 's', 'X', 'v', 'U', 'c', 'u', 'G', 'g', 'o', 'k', 'm', 'Q', 'q']),
+    longBool: new Set([
+      '--all', '--almost-all', '--human-readable', '--reverse', '--recursive', '--directory',
+      '--classify', '--color', '--group-directories-first',
+    ]),
+    valueFlags: new Set(['--color', '--time-style', '--sort']),
+    pathArgs: true,
+  },
+  ll: null,
+  dir: {
+    shortBool: new Set(['a', 'A', 'l', 'h', '1', 'r', 't', 'S', 'R', 'd']),
+    longBool: new Set(['--all', '--human-readable', '--reverse']),
+    valueFlags: new Set([]),
+    allowWinSlashFlags: new Set(['/b', '/a', '/o', '/s', '/w', '/p']),
+    pathArgs: true,
+  },
+  tree: {
+    shortBool: new Set(['a', 'd', 'f', 'F', 'n', 'C']),
+    longBool: new Set(['--dirsfirst', '--noreport']),
+    valueFlags: new Set(['-L', '-I', '-P']),
+    pathArgs: true,
+  },
+  cat: {
+    shortBool: new Set(['n', 'b', 's', 'E', 'T', 'A', 'v', 'e', 't', 'u']),
+    longBool: new Set(['--number', '--number-nonblank', '--squeeze-blank', '--show-ends', '--show-tabs', '--show-all', '--show-nonprinting']),
+    valueFlags: new Set([]),
+    pathArgs: true,
+  },
+  head: {
+    shortBool: new Set(['q', 'v']),
+    longBool: new Set(['--quiet', '--silent', '--verbose']),
+    valueFlags: new Set(['-n', '--lines', '-c', '--bytes']),
+    allowNumericDash: true,
+    pathArgs: true,
+  },
+  tail: {
+    shortBool: new Set(['q', 'v']),
+    longBool: new Set(['--quiet', '--silent', '--verbose']),
+    valueFlags: new Set(['-n', '--lines', '-c', '--bytes']),
+    allowNumericDash: true,
+    pathArgs: true,
+  },
+  wc: {
+    shortBool: new Set(['l', 'w', 'c', 'm', 'L']),
+    longBool: new Set(['--lines', '--words', '--bytes', '--chars', '--max-line-length']),
+    valueFlags: new Set([]),
+    pathArgs: true,
+  },
+  stat: {
+    shortBool: new Set(['t', 'x']),
+    longBool: new Set(['--terse']),
+    valueFlags: new Set(['-c', '--format', '-f']),
+    pathArgs: true,
+  },
+  file: {
+    shortBool: new Set(['b', 'i']),
+    longBool: new Set(['--brief', '--mime', '--mime-type', '--mime-encoding']),
+    valueFlags: new Set([]),
+    pathArgs: true,
+  },
+  pwd: {
+    shortBool: new Set(['P', 'L']),
+    longBool: new Set(['--physical', '--logical']),
+    valueFlags: new Set([]),
+    maxPositional: 0,
+  },
+  whoami: {
+    shortBool: new Set([]),
+    longBool: new Set([]),
+    valueFlags: new Set([]),
+    maxPositional: 0,
+  },
+  id: {
+    shortBool: new Set(['u', 'g', 'G', 'n', 'r']),
+    longBool: new Set(['--user', '--group', '--groups', '--name', '--real']),
+    valueFlags: new Set([]),
+    maxPositional: 0,
+  },
+  uname: {
+    shortBool: new Set(['a', 's', 'n', 'r', 'v', 'm', 'p', 'i', 'o']),
+    longBool: new Set(['--all', '--kernel-name', '--nodename', '--kernel-release', '--kernel-version', '--machine', '--processor', '--hardware-platform', '--operating-system']),
+    valueFlags: new Set([]),
+    maxPositional: 0,
+  },
+  date: {
+    shortBool: new Set(['u']),
+    longBool: new Set(['--utc', '--universal']),
+    valueFlags: new Set([]),
+    allowPlusFormat: true,
+    maxPositional: 0,
+  },
+  which: {
+    shortBool: new Set(['a']),
+    longBool: new Set(['--all']),
+    valueFlags: new Set([]),
+    bareNameArgsOnly: true,
+  },
+  where: {
+    shortBool: new Set([]),
+    longBool: new Set([]),
+    valueFlags: new Set([]),
+    bareNameArgsOnly: true,
+  },
+  type: {
+    shortBool: new Set(['a', 't', 'p', 'P']),
+    longBool: new Set([]),
+    valueFlags: new Set([]),
+    bareNameArgsOnly: true,
+  },
+  echo: {
+    shortBool: new Set(['n', 'e', 'E']),
+    longBool: new Set([]),
+    valueFlags: new Set([]),
+    pathArgs: false,
+  },
+};
+READ_ONLY_COMMAND_SPECS.ripgrep = READ_ONLY_COMMAND_SPECS.rg;
+READ_ONLY_COMMAND_SPECS.egrep = READ_ONLY_COMMAND_SPECS.grep;
+READ_ONLY_COMMAND_SPECS.fgrep = READ_ONLY_COMMAND_SPECS.grep;
+READ_ONLY_COMMAND_SPECS.ll = READ_ONLY_COMMAND_SPECS.ls;
+
+const GIT_READ_ONLY_SUBCOMMANDS = {
+  status: {
+    shortBool: new Set(['s', 'b', 'v', 'u', 'z']),
+    longBool: new Set([
+      '--short', '--branch', '--show-stash', '--verbose', '--untracked-files', '--ignored',
+      '--porcelain', '--long', '--renames', '--no-renames', '--ahead-behind', '--no-ahead-behind',
+      '--no-optional-locks',
+    ]),
+    valueFlags: new Set(['--untracked-files', '--porcelain', '--ignored', '-u']),
+    pathArgs: true,
+  },
+  diff: {
+    shortBool: new Set(['p', 'w', 'b', 'q']),
+    longBool: new Set([
+      '--stat', '--numstat', '--shortstat', '--summary', '--name-only', '--name-status',
+      '--cached', '--staged', '--no-ext-diff', '--no-textconv', '--no-color', '--color',
+      '--word-diff', '--ignore-all-space', '--ignore-space-change', '--ignore-blank-lines',
+      '--check', '--compact-summary', '--raw', '--patch', '--quiet', '--exit-code',
+      '--histogram', '--patience', '--minimal', '--no-prefix',
+    ]),
+    valueFlags: new Set(['-U', '--unified', '--color', '--word-diff', '--src-prefix', '--dst-prefix']),
+    pathArgs: true,
+  },
+  log: {
+    shortBool: new Set(['s', 'p']),
+    longBool: new Set([
+      '--oneline', '--stat', '--numstat', '--shortstat', '--name-only', '--name-status',
+      '--graph', '--decorate', '--no-decorate', '--all', '--branches', '--tags', '--remotes',
+      '--first-parent', '--merges', '--no-merges', '--reverse', '--abbrev-commit', '--no-abbrev-commit',
+      '--pretty', '--no-patch', '--patch', '--no-textconv', '--no-ext-diff', '--color', '--no-color',
+    ]),
+    valueFlags: new Set([
+      '-n', '--max-count', '--decorate', '--date', '--since', '--after', '--until', '--before',
+      '--author', '--grep', '--format', '--pretty', '--color',
+    ]),
+    allowNumericDash: true,
+    pathArgs: true,
+  },
+  show: {
+    shortBool: new Set(['s', 'p']),
+    longBool: new Set([
+      '--stat', '--numstat', '--shortstat', '--name-only', '--name-status', '--oneline',
+      '--no-patch', '--patch', '--no-textconv', '--no-ext-diff', '--color', '--no-color',
+      '--abbrev-commit',
+    ]),
+    valueFlags: new Set(['--format', '--pretty', '--color']),
+    pathArgs: true,
+  },
+  branch: {
+    shortBool: new Set(['l', 'a', 'r', 'v']),
+    longBool: new Set([
+      '--list', '--all', '--remotes', '--verbose', '--show-current', '--merged', '--no-merged',
+      '--color', '--no-color',
+    ]),
+    valueFlags: new Set(['--contains', '--no-contains', '--sort', '--format', '--color']),
+    requireZeroPositionalUnlessFlag: new Set(['--list', '-l']),
+    pathArgs: false,
+  },
+  'rev-parse': {
+    shortBool: new Set(['q']),
+    longBool: new Set([
+      '--show-toplevel', '--abbrev-ref', '--short', '--verify', '--git-dir',
+      '--is-inside-work-tree', '--is-bare-repository', '--symbolic', '--symbolic-full-name',
+      '--show-prefix', '--show-cdup', '--all', '--branches', '--tags', '--remotes', '--quiet',
+    ]),
+    valueFlags: new Set(['--short', '--abbrev-ref']),
+    pathArgs: false,
+  },
+  describe: {
+    shortBool: new Set([]),
+    longBool: new Set(['--tags', '--always', '--long', '--dirty', '--exact-match', '--all', '--first-parent']),
+    valueFlags: new Set(['--abbrev', '--dirty']),
+    pathArgs: false,
+  },
+  remote: {
+    shortBool: new Set(['v']),
+    longBool: new Set(['--verbose']),
+    valueFlags: new Set([]),
+    maxPositional: 0,
+  },
+};
 
 const SECRET_KEY_PATTERN = /(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|authorization|credential|private[_-]?key|bearer|auth)/i;
 const SECRET_VALUE_PATTERNS = [
@@ -307,6 +678,15 @@ class StdinLimitError extends Error {
 
 function isRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeMinRisk(value, fallback = 'high') {
+  const lower = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return Object.prototype.hasOwnProperty.call(RISK_ORDER, lower) ? lower : fallback;
+}
+
+function meetsMinRisk(level, minRisk) {
+  return (RISK_ORDER[level] ?? 0) >= (RISK_ORDER[minRisk] ?? RISK_ORDER.high);
 }
 
 function exceedsMaxDepth(value, maxDepth = MAX_JSON_DEPTH) {
@@ -558,16 +938,795 @@ function isCodexInternalPlanApproval(event) {
   return true;
 }
 
-function isSafeReadOnlyCommand(command) {
+function isAbsolutePathArg(value) {
+  const raw = String(value || '').trim();
+  return raw.startsWith('/') || /^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith('\\\\');
+}
+
+function isPathInsideRoots(target, workspaceRoots) {
+  const roots = Array.isArray(workspaceRoots)
+    ? workspaceRoots.filter((r) => typeof r === 'string' && r.trim().length > 0)
+    : [];
+  if (roots.length === 0) return false;
+  const normTarget = normalizeDriveAndPosixPath(target);
+  return roots.some((root) => {
+    const normRoot = normalizeDriveAndPosixPath(root);
+    if (normTarget.drive !== normRoot.drive) return false;
+    return normTarget.normalized === normRoot.normalized || normTarget.normalized.startsWith(`${normRoot.normalized}/`);
+  });
+}
+
+function splitShellSegments(command) {
+  const input = String(command || '');
+  const segments = [];
+  const subexpressions = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    const next = input[i + 1];
+
+    if (inSingle) {
+      if (ch === '\'') inSingle = false;
+      current += ch;
+      continue;
+    }
+
+    if (ch === '\\' && i + 1 < input.length) {
+      current += ch + next;
+      i += 1;
+      continue;
+    }
+
+    if (inDouble) {
+      if (ch === '"') inDouble = false;
+      current += ch;
+      continue;
+    }
+
+    if (ch === '\'') {
+      inSingle = true;
+      current += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      current += ch;
+      continue;
+    }
+
+    if (ch === '$' && next === '(') {
+      let depth = 1;
+      let j = i + 2;
+      let inner = '';
+      while (j < input.length && depth > 0) {
+        if (input[j] === '(') depth += 1;
+        else if (input[j] === ')') depth -= 1;
+        if (depth > 0) inner += input[j];
+        j += 1;
+      }
+      if (inner.trim()) subexpressions.push(inner.trim());
+      current += input.slice(i, j);
+      i = j - 1;
+      continue;
+    }
+
+    if (ch === '`') {
+      let j = i + 1;
+      let inner = '';
+      while (j < input.length && input[j] !== '`') {
+        inner += input[j];
+        j += 1;
+      }
+      if (inner.trim()) subexpressions.push(inner.trim());
+      current += input.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+
+    if (ch === ';' || ch === '\n' || ch === '\r') {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    if ((ch === '&' && next === '&') || (ch === '|' && next === '|')) {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      i += 1;
+      continue;
+    }
+
+    if (ch === '|' || ch === '&') {
+      if (current.trim()) segments.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (current.trim()) segments.push(current.trim());
+  for (const expr of subexpressions) {
+    for (const sub of splitShellSegments(expr)) {
+      segments.push(sub);
+    }
+  }
+  return segments;
+}
+
+function tokenizeShellSegment(segment) {
+  const input = String(segment || '').trim();
+  const tokens = [];
+  let current = '';
+  let hasToken = false;
+  let inSingle = false;
+  let inDouble = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    const next = input[i + 1];
+
+    if (inSingle) {
+      if (ch === '\'') {
+        inSingle = false;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (inDouble) {
+      if (ch === '\\' && next && (next === '"' || next === '\\' || next === '$' || next === '`')) {
+        current += next;
+        i += 1;
+      } else if (ch === '"') {
+        inDouble = false;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (ch === '\'') {
+      inSingle = true;
+      hasToken = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      hasToken = true;
+      continue;
+    }
+
+    if (ch === '\\' && next && /[\s'"\\;&|<>$`()]/.test(next)) {
+      current += next;
+      hasToken = true;
+      i += 1;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      if (hasToken) {
+        tokens.push(current);
+        current = '';
+        hasToken = false;
+      }
+      continue;
+    }
+
+    current += ch;
+    hasToken = true;
+  }
+
+  if (inSingle || inDouble) {
+    return { ok: false, tokens };
+  }
+  if (hasToken) {
+    tokens.push(current);
+  }
+  return { ok: true, tokens };
+}
+
+function normalizeExecutableName(rawToken) {
+  const base = String(rawToken || '').trim().split(/[\\/]/).pop() || '';
+  return base.toLowerCase().replace(/\.(?:exe|cmd|bat|com|ps1)$/i, '');
+}
+
+function stripWrapperPrefixes(tokens) {
+  let working = [...tokens];
+  let idx = 0;
+  let hadSudo = false;
+  let wrapped = false;
+  let guard = 0;
+
+  while (idx < working.length && guard < 16) {
+    guard += 1;
+    const tok = working[idx];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) {
+      idx += 1;
+      wrapped = true;
+      continue;
+    }
+    const exec = normalizeExecutableName(tok);
+
+    if (exec === 'env') {
+      wrapped = true;
+      idx += 1;
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') {
+          idx += 1;
+          break;
+        }
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+          idx += 1;
+          continue;
+        }
+        if (arg === '-S' || arg === '--split-string') {
+          const val = working[idx + 1] || '';
+          const splitRes = tokenizeShellSegment(val);
+          if (splitRes.ok && splitRes.tokens.length > 0) {
+            working = [...working.slice(0, idx), ...splitRes.tokens, ...working.slice(idx + 2)];
+            continue;
+          }
+          idx += 2;
+          continue;
+        }
+        if (arg.startsWith('--split-string=')) {
+          const splitRes = tokenizeShellSegment(arg.slice('--split-string='.length));
+          if (splitRes.ok && splitRes.tokens.length > 0) {
+            working = [...working.slice(0, idx), ...splitRes.tokens, ...working.slice(idx + 1)];
+            continue;
+          }
+          idx += 1;
+          continue;
+        }
+        if (arg === '-u' || arg === '--unset' || arg === '-C' || arg === '--chdir') {
+          idx += 2;
+          continue;
+        }
+        if (/^-(?:i|0|v)$/.test(arg) || arg === '-' || /^--(?:ignore-environment|null|debug|unset=|chdir=|default-signal|ignore-signal|block-signal)/.test(arg)) {
+          idx += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+
+    if (exec === 'sudo' || exec === 'doas') {
+      hadSudo = true;
+      wrapped = true;
+      idx += 1;
+      const sudoValFlags = new Set(['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-r', '--role', '-t', '--type', '-T', '--command-timeout', '-C', '--close-from', '-D', '--chdir', '-R', '--chroot', '-U', '--other-user']);
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') {
+          idx += 1;
+          break;
+        }
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+          idx += 1;
+          continue;
+        }
+        const eqIdx = arg.indexOf('=');
+        if (eqIdx > 0 && sudoValFlags.has(arg.slice(0, eqIdx))) {
+          idx += 1;
+          continue;
+        }
+        if (sudoValFlags.has(arg)) {
+          idx += 2;
+          continue;
+        }
+        if (/^-[AbEeHiKknPSsvL]+$/.test(arg) || /^--(?:preserve-env|login|non-interactive|set-home|stdin)/.test(arg)) {
+          idx += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+
+    if (exec === 'command' || exec === 'builtin' || exec === 'exec' || exec === 'nohup' || exec === 'time') {
+      wrapped = true;
+      idx += 1;
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') {
+          idx += 1;
+          break;
+        }
+        if (exec === 'exec' && arg === '-a') {
+          idx += 2;
+          continue;
+        }
+        if (/^-[pvVlc]+$/.test(arg)) {
+          idx += 1;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
+
+    if (exec === 'nice') {
+      wrapped = true;
+      idx += 1;
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') { idx += 1; break; }
+        if (arg === '-n' || arg === '--adjustment') { idx += 2; continue; }
+        if (/^--adjustment=/.test(arg) || /^-\d+$/.test(arg)) { idx += 1; continue; }
+        break;
+      }
+      continue;
+    }
+
+    if (exec === 'timeout') {
+      wrapped = true;
+      idx += 1;
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') { idx += 1; break; }
+        if (arg === '-k' || arg === '--kill-after' || arg === '-s' || arg === '--signal') { idx += 2; continue; }
+        if (/^--(?:kill-after|signal)=/.test(arg) || /^--(?:preserve-status|foreground|verbose)$/.test(arg) || arg === '-v') { idx += 1; continue; }
+        break;
+      }
+      if (idx < working.length && /^\d+(?:\.\d+)?[smhd]?$/i.test(working[idx])) {
+        idx += 1;
+      }
+      continue;
+    }
+
+    if (exec === 'stdbuf' || exec === 'ionice') {
+      wrapped = true;
+      idx += 1;
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') { idx += 1; break; }
+        if (/^-[ioecnt]$/.test(arg) || /^--(?:input|output|error|class|classdata)$/.test(arg)) { idx += 2; continue; }
+        if (/^-[ioecnt].+/.test(arg) || /^--(?:input|output|error|class|classdata)=/.test(arg)) { idx += 1; continue; }
+        break;
+      }
+      continue;
+    }
+
+    if (exec === 'xargs') {
+      wrapped = true;
+      idx += 1;
+      const xargsVal = new Set(['-I', '-L', '-n', '-P', '-d', '-E', '-s', '--replace', '--max-args', '--max-procs', '--delimiter', '--eof']);
+      while (idx < working.length) {
+        const arg = working[idx];
+        if (arg === '--') { idx += 1; break; }
+        const eqIdx = arg.indexOf('=');
+        if (eqIdx > 0 && xargsVal.has(arg.slice(0, eqIdx))) { idx += 1; continue; }
+        if (xargsVal.has(arg)) { idx += 2; continue; }
+        if (/^-[0rtpx]+$/.test(arg) || /^--(?:null|no-run-if-empty|verbose)$/.test(arg)) { idx += 1; continue; }
+        break;
+      }
+      continue;
+    }
+
+    break;
+  }
+
+  return { tokens: working.slice(idx), hadSudo, wrapped };
+}
+
+function stripCliGlobalOptions(execName, restTokens) {
+  const spec = CLI_GLOBAL_OPTIONS[execName];
+  if (!spec) {
+    return { globalFlags: [], remaining: restTokens };
+  }
+  const globalFlags = [];
+  let i = 0;
+  while (i < restTokens.length) {
+    const tok = restTokens[i];
+    if (spec.skipPlusToolchain && /^\+[A-Za-z0-9._-]+$/.test(tok)) {
+      globalFlags.push(tok);
+      i += 1;
+      continue;
+    }
+    if (!tok.startsWith('-') || tok === '-' || tok === '--') {
+      break;
+    }
+    const eqIdx = tok.indexOf('=');
+    if (eqIdx > 0) {
+      const flagName = tok.slice(0, eqIdx);
+      if (spec.valueFlags.has(flagName) || spec.boolFlags.has(flagName)) {
+        globalFlags.push(tok);
+        i += 1;
+        continue;
+      }
+      if (spec.attachedShortValueFlags && spec.attachedShortValueFlags.some((f) => tok.startsWith(f) && tok.length > f.length)) {
+        globalFlags.push(tok);
+        i += 1;
+        continue;
+      }
+      break;
+    }
+    if (spec.valueFlags.has(tok)) {
+      globalFlags.push(tok);
+      if (i + 1 < restTokens.length) {
+        globalFlags.push(restTokens[i + 1]);
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+    if (spec.boolFlags.has(tok)) {
+      globalFlags.push(tok);
+      i += 1;
+      continue;
+    }
+    if (spec.attachedShortValueFlags && spec.attachedShortValueFlags.some((f) => tok.startsWith(f) && tok.length > f.length)) {
+      globalFlags.push(tok);
+      i += 1;
+      continue;
+    }
+    break;
+  }
+
+  let remaining = restTokens.slice(i);
+  if ((execName === 'docker' || execName === 'podman' || execName === 'nerdctl') && remaining[0] === 'compose') {
+    const composeValFlags = new Set(['-f', '--file', '-p', '--project-name', '--profile', '--env-file', '--project-directory']);
+    let j = 1;
+    while (j < remaining.length) {
+      const ctok = remaining[j];
+      if (!ctok.startsWith('-') || ctok === '--') break;
+      const ceq = ctok.indexOf('=');
+      if (ceq > 0 && composeValFlags.has(ctok.slice(0, ceq))) {
+        globalFlags.push(ctok);
+        j += 1;
+        continue;
+      }
+      if (composeValFlags.has(ctok)) {
+        globalFlags.push(ctok);
+        if (j + 1 < remaining.length) {
+          globalFlags.push(remaining[j + 1]);
+          j += 2;
+        } else {
+          j += 1;
+        }
+        continue;
+      }
+      break;
+    }
+    remaining = ['compose', ...remaining.slice(j)];
+  }
+
+  return { globalFlags, remaining };
+}
+
+function normalizeCommandSegments(command) {
+  const rawSegments = splitShellSegments(command);
+  const parsedSegments = [];
+  const normalizedLines = [];
+
+  for (const seg of rawSegments) {
+    const tokRes = tokenizeShellSegment(seg);
+    if (!tokRes.tokens.length) continue;
+    const unwrapped = stripWrapperPrefixes(tokRes.tokens);
+    if (!unwrapped.tokens.length) continue;
+    const execName = normalizeExecutableName(unwrapped.tokens[0]);
+    const rest = unwrapped.tokens.slice(1);
+    const { globalFlags, remaining } = stripCliGlobalOptions(execName, rest);
+    const normalized = [execName, ...remaining].join(' ').trim();
+    if (normalized) normalizedLines.push(normalized);
+    parsedSegments.push({
+      raw: seg,
+      rawTokens: tokRes.tokens,
+      execName,
+      rawArgs: rest,
+      globalFlags,
+      remaining,
+      hadSudo: unwrapped.hadSudo,
+      wrapped: unwrapped.wrapped,
+      normalized,
+    });
+  }
+
+  return { parsedSegments, normalizedLines };
+}
+
+function inspectExecOptions(parsedSegments, workspaceRoots = []) {
+  for (const seg of parsedSegments) {
+    const { execName, globalFlags, remaining, rawArgs } = seg;
+
+    if (execName === 'git') {
+      for (let i = 0; i < globalFlags.length; i += 1) {
+        const flag = globalFlags[i];
+        if (
+          flag === '-c' ||
+          /^-c.+/.test(flag) ||
+          flag === '--config-env' ||
+          /^--config-env=/.test(flag) ||
+          flag === '--exec-path' ||
+          /^--exec-path=/.test(flag)
+        ) {
+          return {
+            risk: 'high',
+            fastAllow: false,
+            ruleId: 'high_git_exec_option',
+            reason: 'Git command uses a config or exec-path option capable of running external programs',
+          };
+        }
+        let dirVal = '';
+        if (flag === '--git-dir' || flag === '--work-tree' || flag === '-C') {
+          dirVal = globalFlags[i + 1] || '';
+          i += 1;
+        } else if (/^--(?:git-dir|work-tree)=/.test(flag)) {
+          dirVal = flag.slice(flag.indexOf('=') + 1);
+        } else if (/^-C.+/.test(flag)) {
+          dirVal = flag.slice(2);
+        }
+        if (dirVal) {
+          if (containsSensitiveMarker(dirVal)) {
+            return {
+              risk: 'critical',
+              fastAllow: false,
+              ruleId: 'critical_sensitive_file',
+              reason: 'Git directory option references a sensitive path',
+            };
+          }
+          if (containsPathTraversal(dirVal) || isHomeRelativePath(dirVal) || (isAbsolutePathArg(dirVal) && !isPathInsideRoots(dirVal, workspaceRoots))) {
+            return {
+              risk: 'high',
+              fastAllow: false,
+              ruleId: 'high_git_outside_workspace',
+              reason: 'Git directory option targets a path outside the active workspace',
+            };
+          }
+        }
+      }
+
+      for (let i = 0; i < remaining.length; i += 1) {
+        const arg = remaining[i];
+        if (
+          arg === '--ext-diff' ||
+          arg === '--textconv' ||
+          arg === '--upload-pack' ||
+          /^--upload-pack=/.test(arg) ||
+          arg === '--receive-pack' ||
+          /^--receive-pack=/.test(arg) ||
+          arg === '--output' ||
+          /^--output=/.test(arg) ||
+          arg === '--config-env' ||
+          /^--config-env=/.test(arg) ||
+          arg === '--exec-path' ||
+          /^--exec-path=/.test(arg) ||
+          (arg === '-c' && remaining[i + 1] && remaining[i + 1].includes('=')) ||
+          /^-c=/.test(arg)
+        ) {
+          return {
+            risk: 'high',
+            fastAllow: false,
+            ruleId: 'high_git_exec_option',
+            reason: 'Git command uses a diff, textconv, config, output, or exec option capable of running programs or writing files',
+          };
+        }
+      }
+    }
+
+    if (execName === 'rg' || execName === 'ripgrep') {
+      for (const arg of rawArgs) {
+        if (
+          arg === '--pre' ||
+          /^--pre=/.test(arg) ||
+          arg === '--pre-glob' ||
+          /^--pre-glob=/.test(arg) ||
+          arg === '--hostname-bin' ||
+          /^--hostname-bin=/.test(arg)
+        ) {
+          return {
+            risk: 'high',
+            fastAllow: false,
+            ruleId: 'high_rg_exec_option',
+            reason: 'Ripgrep option (--pre, --pre-glob, or --hostname-bin) invokes an external executable',
+          };
+        }
+      }
+    }
+
+    if (execName === 'fd' || execName === 'fdfind') {
+      for (const arg of rawArgs) {
+        if (
+          arg === '-x' ||
+          arg === '-X' ||
+          arg === '--exec' ||
+          /^--exec=/.test(arg) ||
+          arg === '--exec-batch' ||
+          /^--exec-batch=/.test(arg)
+        ) {
+          return {
+            risk: 'high',
+            fastAllow: false,
+            ruleId: 'high_fd_exec_option',
+            reason: 'fd exec option invokes an external command on matched paths',
+          };
+        }
+      }
+    }
+
+    if (execName === 'find') {
+      for (const arg of rawArgs) {
+        if (/^-(?:delete|exec|execdir|ok|okdir|fprint0?|fprintf|fls)$/.test(arg)) {
+          return {
+            risk: 'high',
+            fastAllow: false,
+            ruleId: 'high_find_exec_or_write',
+            reason: 'find command uses a destructive, exec, or file-writing option',
+          };
+        }
+      }
+    }
+
+    if (execName === 'tar') {
+      for (const arg of rawArgs) {
+        if (
+          arg === '--checkpoint-action' ||
+          /^--checkpoint-action=/.test(arg) ||
+          arg === '--to-command' ||
+          /^--to-command=/.test(arg) ||
+          arg === '--rsh-command' ||
+          /^--rsh-command=/.test(arg)
+        ) {
+          return {
+            risk: 'high',
+            fastAllow: false,
+            ruleId: 'high_archive_exec_option',
+            reason: 'tar option invokes an external command',
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function validateReadOnlyArgs(args, spec, workspaceRoots = []) {
+  let afterDoubleDash = false;
+  const seenFlags = new Set();
+  const positional = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const tok = args[i];
+    if (!afterDoubleDash && tok === '--') {
+      afterDoubleDash = true;
+      continue;
+    }
+    if (!afterDoubleDash && spec.allowPlusFormat && tok.startsWith('+')) {
+      continue;
+    }
+    if (!afterDoubleDash && spec.allowWinSlashFlags && spec.allowWinSlashFlags.has(tok.toLowerCase())) {
+      continue;
+    }
+    if (!afterDoubleDash && tok.startsWith('-') && tok.length > 1) {
+      if (spec.allowNumericDash && /^-\d+$/.test(tok)) {
+        continue;
+      }
+      const eqIdx = tok.indexOf('=');
+      if (eqIdx > 0) {
+        const flagName = tok.slice(0, eqIdx);
+        const flagVal = tok.slice(eqIdx + 1);
+        if (!spec.valueFlags.has(flagName)) return false;
+        if (containsSensitiveMarker(flagVal) || containsPathTraversal(flagVal) || isHomeRelativePath(flagVal)) {
+          return false;
+        }
+        seenFlags.add(flagName);
+        continue;
+      }
+      if (tok.startsWith('--')) {
+        if (spec.longBool.has(tok)) {
+          seenFlags.add(tok);
+          continue;
+        }
+        if (spec.valueFlags.has(tok)) {
+          if (i + 1 >= args.length) return false;
+          const nextVal = args[i + 1];
+          if (containsSensitiveMarker(nextVal) || containsPathTraversal(nextVal) || isHomeRelativePath(nextVal)) {
+            return false;
+          }
+          seenFlags.add(tok);
+          i += 1;
+          continue;
+        }
+        return false;
+      }
+      if (spec.valueFlags.has(tok)) {
+        if (i + 1 >= args.length) return false;
+        const nextVal = args[i + 1];
+        if (containsSensitiveMarker(nextVal) || containsPathTraversal(nextVal) || isHomeRelativePath(nextVal)) {
+          return false;
+        }
+        seenFlags.add(tok);
+        i += 1;
+        continue;
+      }
+      if (tok.length > 2 && spec.valueFlags.has(tok.slice(0, 2)) && /^\d+$/.test(tok.slice(2))) {
+        seenFlags.add(tok.slice(0, 2));
+        continue;
+      }
+      const chars = tok.slice(1);
+      for (let c = 0; c < chars.length; c += 1) {
+        if (!spec.shortBool.has(chars[c])) return false;
+        seenFlags.add(`-${chars[c]}`);
+      }
+      continue;
+    }
+    positional.push(tok);
+  }
+
+  if (typeof spec.maxPositional === 'number' && positional.length > spec.maxPositional) {
+    return false;
+  }
+  if (spec.requireZeroPositionalUnlessFlag && positional.length > 0) {
+    const allowed = [...spec.requireZeroPositionalUnlessFlag].some((f) => seenFlags.has(f));
+    if (!allowed) return false;
+  }
+  if (spec.bareNameArgsOnly) {
+    for (const arg of positional) {
+      if (!/^[A-Za-z0-9._+-]+$/.test(arg)) return false;
+    }
+  }
+  if (spec.pathArgs) {
+    const hasExplicitPattern = spec.patternArgUnlessFlag
+      ? [...spec.patternArgUnlessFlag].some((f) => seenFlags.has(f))
+      : true;
+    const pathList = spec.patternArgUnlessFlag && !hasExplicitPattern
+      ? positional.slice(1)
+      : positional;
+    for (const p of pathList) {
+      if (containsSensitiveMarker(p) || containsPathTraversal(p) || isHomeRelativePath(p)) {
+        return false;
+      }
+      if (isAbsolutePathArg(p) && !isPathInsideRoots(p, workspaceRoots)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function isSafeReadOnlyCommand(command, workspaceRoots = []) {
   const trimmed = String(command || '').trim();
   if (!trimmed) return false;
   if (SHELL_CHAIN_OR_REDIRECT_PATTERN.test(trimmed)) return false;
-  if (GIT_UNSAFE_FLAG_PATTERN.test(trimmed)) return false;
   if (containsPathTraversal(trimmed) || isHomeRelativePath(trimmed)) return false;
   if (containsSensitiveMarker(trimmed)) return false;
   if (CRITICAL_PATTERNS.some((p) => p.regex.test(trimmed))) return false;
   if (HIGH_RISK_PATTERNS.some((p) => p.regex.test(trimmed))) return false;
-  return SAFE_READ_ONLY_SHELL_PATTERNS.some((pattern) => pattern.test(trimmed));
+
+  const tokenized = tokenizeShellSegment(trimmed);
+  if (!tokenized.ok || tokenized.tokens.length === 0) return false;
+
+  const rawExec = tokenized.tokens[0];
+  if (/[\\/=]/.test(rawExec)) return false;
+  const exec = rawExec.toLowerCase();
+  const args = tokenized.tokens.slice(1);
+
+  if (args.length === 1 && VERSION_CHECK_EXECUTABLES.has(exec) && VERSION_CHECK_FLAGS.has(args[0])) {
+    return true;
+  }
+
+  if (exec === 'git') {
+    let idx = 0;
+    if (args[idx] === '--no-pager') idx += 1;
+    if (idx >= args.length) return false;
+    const subcmd = args[idx];
+    if (subcmd.startsWith('-')) return false;
+    const subSpec = GIT_READ_ONLY_SUBCOMMANDS[subcmd];
+    if (!subSpec) return false;
+    return validateReadOnlyArgs(args.slice(idx + 1), subSpec, workspaceRoots);
+  }
+
+  const spec = READ_ONLY_COMMAND_SPECS[exec];
+  if (!spec) return false;
+  return validateReadOnlyArgs(args, spec, workspaceRoots);
 }
 
 function validateApiUrl(rawUrl) {
@@ -652,12 +1811,14 @@ function classifyToolCall(event) {
     return { risk: 'low', fastAllow: true, reason: `Read-only tool (${toolName})` };
   }
 
-  // Shell / exec tools: check safe fast-path first, then critical and high-risk patterns.
+  // Shell / exec tools: check strict read-only allowlist first, then normalized critical/high-risk and exec-option checks.
   if (SHELL_TOOL_NAMES.has(lowerTool) || command) {
-    if (command && isSafeReadOnlyCommand(command)) {
+    const workspaceRoots = cwd ? [cwd] : [];
+    if (command && isSafeReadOnlyCommand(command, workspaceRoots)) {
       return { risk: 'low', fastAllow: true, reason: 'Safe read-only shell command' };
     }
-    const searchable = `${command}\n${targetPaths.join('\n')}\n${stableStringify(toolInput)}`;
+    const { parsedSegments, normalizedLines } = normalizeCommandSegments(command);
+    const searchable = `${command}\n${normalizedLines.join('\n')}\n${targetPaths.join('\n')}\n${stableStringify(toolInput)}`;
     for (const rule of CRITICAL_PATTERNS) {
       if (rule.regex.test(searchable)) {
         return { risk: 'critical', fastAllow: false, reason: rule.reason, ruleId: rule.id };
@@ -667,6 +1828,10 @@ function classifyToolCall(event) {
       if (rule.regex.test(searchable)) {
         return { risk: 'high', fastAllow: false, reason: rule.reason, ruleId: rule.id };
       }
+    }
+    const execOptionFinding = inspectExecOptions(parsedSegments, workspaceRoots);
+    if (execOptionFinding) {
+      return execOptionFinding;
     }
     if (containsSensitiveMarker(searchable)) {
       return {
@@ -819,8 +1984,10 @@ function resolveRuntimeConfig(env, cliArgs = []) {
 
   const zeroDataFlag = String(env.ORBITER_ZERO_DATA_MODE || '').trim().toLowerCase();
   const zeroDataMode = zeroDataFlag === '1' || zeroDataFlag === 'true';
+  const minRisk = normalizeMinRisk(env.ORBITER_MIN_RISK, 'high');
+  const hookProfile = String(env.ORBITER_HOOK_PROFILE || 'default').trim().toLowerCase();
 
-  return { apiUrl, apiKey, timeoutSeconds, pollIntervalMs, zeroDataMode };
+  return { apiUrl, apiKey, timeoutSeconds, pollIntervalMs, zeroDataMode, minRisk, hookProfile };
 }
 
 function buildAuthHeaders(apiKey) {
@@ -1211,8 +2378,8 @@ async function processHookPayload(rawEvent, env = process.env, cliArgs = []) {
 
   const shouldGate =
     eventName === 'PermissionRequest' ||
-    classification.risk === 'high' ||
-    classification.risk === 'critical';
+    config.hookProfile === 'strict' ||
+    meetsMinRisk(classification.risk, config.minRisk);
 
   if (!shouldGate) {
     return buildAllowOutput(eventName, `Allowed (${classification.risk} risk): ${classification.reason}`);
@@ -1341,11 +2508,14 @@ module.exports = {
   containsNullByte,
   containsPathTraversal,
   exceedsMaxDepth,
+  inspectExecOptions,
   isOrbiterTool,
   isSafeReadOnlyCommand,
+  normalizeCommandSegments,
   processHookPayload,
   redactString,
   redactValue,
   resolveRuntimeConfig,
+  tokenizeShellSegment,
   validateApiUrl,
 };

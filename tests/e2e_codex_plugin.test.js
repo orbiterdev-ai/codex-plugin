@@ -249,9 +249,14 @@ test('1. Manifests, marketplace catalog, mirror parity, ci.yml, mcp.json, hooks.
     assert.ok(rootBuf.equals(mktBuf), `Marketplace mirror out of sync for ${relFile}`);
   }
 
-  // CI workflow uses MIT gitleaks v8.30.1 CLI with SHA-256 verification (never paid gitleaks-action)
+  // CI workflow pins every GitHub Action to an immutable 40-char commit SHA (F15) and uses SHA-256 verified MIT gitleaks v8.30.1 CLI
   const ciYaml = fs.readFileSync(path.join(PLUGIN_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   assert.ok(!ciYaml.includes('gitleaks-action'), 'ci.yml must not depend on paid gitleaks-action@v2');
+  const usesLines = [...ciYaml.matchAll(/uses:\s*([^\s#]+)/g)].map((m) => m[1]);
+  assert.ok(usesLines.length >= 3, 'ci.yml must pin all action invocations');
+  for (const ref of usesLines) {
+    assert.match(ref, /^[^@]+@[0-9a-f]{40}$/, `Action ref must be pinned to 40-char commit SHA: ${ref}`);
+  }
   assert.match(ciYaml, /gitleaks_8\.30\.1_linux_x64\.tar\.gz/);
   assert.match(ciYaml, /sha256sum -c -/);
   assert.match(ciYaml, /\/tmp\/gitleaks git --no-banner --redact/);
@@ -994,4 +999,175 @@ test('12. Adversarial E2E: DoS (>2MB stdin), null bytes, invalid JSON, deeply ne
   });
   assert.equal(weirdRes.code, 0);
   assert.ok(weirdRes.json && weirdRes.json.hookSpecificOutput);
+});
+
+test('13. F03/F04: Command structure normalization and strict read-only allowlist hold across PreToolUse, PermissionRequest, and BOTH root & marketplace mirror copies', async () => {
+  const mirrorHookPath = path.join(PLUGIN_ROOT, 'plugins', 'orbiter-dev', 'hooks', 'orbiter-codex-hook.cjs');
+  assert.ok(
+    fs.readFileSync(HOOK_PATH).equals(fs.readFileSync(mirrorHookPath)),
+    'Root hooks/orbiter-codex-hook.cjs and plugins/orbiter-dev/hooks/orbiter-codex-hook.cjs MUST be byte-for-byte identical',
+  );
+
+  const mirrorLib = require(mirrorHookPath);
+  const copies = [
+    { name: 'root', hookPath: HOOK_PATH, lib: hookLib },
+    { name: 'mirror', hookPath: mirrorHookPath, lib: mirrorLib },
+  ];
+
+  // Equivalent normalized command representations must reach identical high/critical threshold
+  const f03Cases = [
+    { cmd: 'git -C /workspace/demo-app push --force origin main', minRisk: 'critical' },
+    { cmd: 'git --git-dir=/workspace/demo-app/.git --work-tree=/workspace/demo-app reset --hard HEAD~1', minRisk: 'high' },
+    { cmd: 'git -c user.name=bot push -f', minRisk: 'critical' },
+    { cmd: 'aws --profile prod --region eu-west-1 s3 rm s3://prod-bucket/data --recursive', minRisk: 'high' },
+    { cmd: 'kubectl --context prod -n payments delete pod api-1', minRisk: 'high' },
+    { cmd: 'docker --host tcp://prod:2376 rm -f web', minRisk: 'high' },
+    { cmd: 'terraform -chdir=infra/prod destroy', minRisk: 'critical' },
+    { cmd: 'rm -r -f ./prod-data', minRisk: 'critical' },
+    { cmd: 'rm --recursive --force ./prod-data', minRisk: 'critical' },
+    { cmd: 'npm --prefix packages/sdk publish', minRisk: 'high' },
+    { cmd: 'wrangler --env prod deploy', minRisk: 'high' },
+    { cmd: 'env FOO=bar git -C /workspace/demo-app push --force', minRisk: 'critical' },
+    { cmd: 'sudo git -C /workspace/demo-app push --force', minRisk: 'critical' },
+    { cmd: '/usr/bin/git -C /workspace/demo-app push --force', minRisk: 'critical' },
+    { cmd: 'git.exe -c user.name=bot push -f', minRisk: 'critical' },
+  ];
+
+  const f04BlockedFastAllow = [
+    'rg --pre sh "foo" src/',
+    'rg --pre=sh "foo" src/',
+    'rg --pre-glob "*.pdf" --pre pdftotext "foo" src/',
+    'rg --hostname-bin /tmp/evil "foo" src/',
+    'git -c core.pager="sh -c id" status',
+    'git -c core.fsmonitor=/tmp/evil.sh status',
+    'git --config-env=core.pager=PAGER status',
+    'git --exec-path=/tmp/bin status',
+    'git --git-dir=/outside/repo/.git status',
+    'git diff --ext-diff',
+    'git log --textconv',
+    'fd -x rm',
+  ];
+
+  const f04NonFastAllowReadOnlyRejects = [
+    'rg -z "foo" archive.gz',
+    'cat /etc/hosts',
+    'tree -o /tmp/dump.txt',
+    'date -s "2020-01-01"',
+  ];
+
+  for (const { name, hookPath, lib } of copies) {
+    // Plain read-only rg stays fast-allowed with zero network calls
+    for (const safeCmd of ['rg "foo" src/', 'rg -n --no-ignore "foo" src/', 'git status --short', 'git diff --stat', 'git log -n 5 --oneline']) {
+      assert.equal(lib.isSafeReadOnlyCommand(safeCmd, ['/workspace/demo-app']), true, `${name}: expected fastAllow for ${safeCmd}`);
+      for (const evt of ['PreToolUse', 'PermissionRequest']) {
+        const res = await lib.processHookPayload({
+          hook_event_name: evt,
+          tool_name: 'Bash',
+          cwd: '/workspace/demo-app',
+          tool_input: { command: safeCmd },
+        }, { ORBITER_DISABLE_CREDENTIAL_FILE: '1' });
+        const allowed = evt === 'PermissionRequest'
+          ? res.hookSpecificOutput.decision.behavior === 'allow'
+          : res.hookSpecificOutput.permissionDecision === 'allow';
+        assert.equal(allowed, true, `${name} ${evt}: expected allow for ${safeCmd}`);
+      }
+    }
+
+    // F03 normalized forms reach identical high/critical risk and gate in BOTH PreToolUse and PermissionRequest
+    for (const { cmd, minRisk } of f03Cases) {
+      assert.equal(lib.isSafeReadOnlyCommand(cmd, ['/workspace/demo-app']), false, `${name}: F03 cmd must not fastAllow: ${cmd}`);
+      for (const evt of ['PreToolUse', 'PermissionRequest']) {
+        const cls = lib.classifyToolCall({
+          hook_event_name: evt,
+          tool_name: 'Bash',
+          cwd: '/workspace/demo-app',
+          tool_input: { command: cmd },
+        });
+        assert.equal(cls.fastAllow, false, `${name} ${evt}: F03 cmd must not fastAllow: ${cmd}`);
+        if (minRisk === 'critical') {
+          assert.equal(cls.risk, 'critical', `${name} ${evt}: expected critical for "${cmd}", got ${cls.risk}`);
+        } else {
+          assert.ok(cls.risk === 'high' || cls.risk === 'critical', `${name} ${evt}: expected high/critical for "${cmd}", got ${cls.risk}`);
+        }
+        const out = await lib.processHookPayload({
+          hook_event_name: evt,
+          tool_name: 'Bash',
+          cwd: '/workspace/demo-app',
+          tool_input: { command: cmd },
+        }, { ORBITER_DISABLE_CREDENTIAL_FILE: '1' });
+        const denied = evt === 'PermissionRequest'
+          ? out.hookSpecificOutput.decision.behavior === 'deny'
+          : out.hookSpecificOutput.permissionDecision === 'deny';
+        assert.equal(denied, true, `${name} ${evt}: expected fail-closed deny (gated) for "${cmd}"`);
+      }
+    }
+
+    // F04 effectful options MUST NEVER fast-allow and MUST gate in BOTH PreToolUse AND PermissionRequest
+    for (const cmd of f04BlockedFastAllow) {
+      assert.equal(lib.isSafeReadOnlyCommand(cmd, ['/workspace/demo-app']), false, `${name}: F04 must reject fastAllow for ${cmd}`);
+      for (const evt of ['PreToolUse', 'PermissionRequest']) {
+        const cls = lib.classifyToolCall({
+          hook_event_name: evt,
+          tool_name: 'Bash',
+          cwd: '/workspace/demo-app',
+          tool_input: { command: cmd },
+        });
+        assert.equal(cls.fastAllow, false, `${name} ${evt}: must NEVER fastAllow "${cmd}"`);
+        assert.ok(cls.risk === 'high' || cls.risk === 'critical', `${name} ${evt}: expected high/critical for "${cmd}", got ${cls.risk}`);
+        const out = await lib.processHookPayload({
+          hook_event_name: evt,
+          tool_name: 'Bash',
+          cwd: '/workspace/demo-app',
+          tool_input: { command: cmd },
+        }, { ORBITER_DISABLE_CREDENTIAL_FILE: '1' });
+        const denied = evt === 'PermissionRequest'
+          ? out.hookSpecificOutput.decision.behavior === 'deny'
+          : out.hookSpecificOutput.permissionDecision === 'deny';
+        assert.equal(denied, true, `${name} ${evt}: expected fail-closed deny for "${cmd}"`);
+      }
+    }
+
+    for (const cmd of f04NonFastAllowReadOnlyRejects) {
+      assert.equal(lib.isSafeReadOnlyCommand(cmd, ['/workspace/demo-app']), false, `${name}: must reject fastAllow for ${cmd}`);
+      const permOut = await lib.processHookPayload({
+        hook_event_name: 'PermissionRequest',
+        tool_name: 'Bash',
+        cwd: '/workspace/demo-app',
+        tool_input: { command: cmd },
+      }, { ORBITER_DISABLE_CREDENTIAL_FILE: '1' });
+      assert.equal(permOut.hookSpecificOutput.decision.behavior, 'deny', `${name} PermissionRequest: must gate "${cmd}"`);
+    }
+
+    // Strict profile gates unknown/effectful medium shell commands on PreToolUse
+    const strictOut = await lib.processHookPayload({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      cwd: '/workspace/demo-app',
+      tool_input: { command: 'node scripts/custom-task.js' },
+    }, { ORBITER_DISABLE_CREDENTIAL_FILE: '1', ORBITER_HOOK_PROFILE: 'strict' });
+    assert.equal(strictOut.hookSpecificOutput.permissionDecision, 'deny', `${name}: strict profile must gate medium shell command`);
+
+    // Subprocess check on BOTH root and mirror for rg --pre and git -c
+    for (const evt of ['PreToolUse', 'PermissionRequest']) {
+      for (const cmd of ['rg --pre sh "foo" src/', 'git -c core.pager="sh -c id" status']) {
+        const sub = spawnSync(process.execPath, [hookPath], {
+          cwd: PLUGIN_ROOT,
+          env: { ...process.env, ORBITER_DISABLE_CREDENTIAL_FILE: '1', ORBITER_API_KEY: '', ORBITER_TOKEN: '' },
+          input: JSON.stringify({
+            hook_event_name: evt,
+            tool_name: 'Bash',
+            cwd: '/workspace/demo-app',
+            tool_input: { command: cmd },
+          }),
+          encoding: 'utf8',
+        });
+        assert.equal(sub.status, 0);
+        const parsed = JSON.parse(sub.stdout.trim());
+        const denied = evt === 'PermissionRequest'
+          ? parsed.hookSpecificOutput.decision.behavior === 'deny'
+          : parsed.hookSpecificOutput.permissionDecision === 'deny';
+        assert.equal(denied, true, `${name} subprocess ${evt}: must gate "${cmd}"`);
+      }
+    }
+  }
 });
