@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/orbiter-codex-hook.cjs\"",
+            "timeout": 300,
+            "statusMessage": "Checking Orbiter Dev risk policy"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/orbiter-codex-hook.cjs\"",
+            "timeout": 300,
+            "statusMessage": "Requesting Orbiter Dev mobile biometric approval"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/orbiter-codex-hook.cjs\"",
+            "timeout": 15,
+            "statusMessage": "Recording Orbiter Dev audit telemetry"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/orbiter-codex-hook.cjs\"",
+            "timeout": 15,
+            "statusMessage": "Closing Orbiter Dev Codex turn"
+          }
+        ]
+      }
+    ]
+  }
+}

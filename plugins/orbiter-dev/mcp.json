@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "orbiter-dev": {
+      "type": "http",
+      "transport": "streamable-http",
+      "url": "https://mcp.orbiterdev.ai/mcp",
+      "auth": {
+        "type": "oauth2",
+        "pkce": true,
+        "protectedResourceMetadata": "https://mcp.orbiterdev.ai/.well-known/oauth-protected-resource/mcp"
+      },
+      "description": "Zero-install Hosted Orbiter Dev Remote MCP (Streamable HTTP + OAuth 2.1 PKCE). For local stdio fallback, configure command 'npx' with args ['-y', '@orbiterdev/mcp-server'] and env ORBITER_SERVER_URL=https://api.orbiterdev.ai."
+    }
+  }
+}

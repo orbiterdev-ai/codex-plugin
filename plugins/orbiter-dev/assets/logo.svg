@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img">
+<defs>
+
+    <radialGradient id="orbiter_v15_app_icon-o" cx="38%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#7FCCFF"/>
+      <stop offset="48%" stop-color="#1577F2"/>
+      <stop offset="100%" stop-color="#0A1060"/>
+    </radialGradient>
+    <radialGradient id="orbiter_v15_app_icon-d" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#FFEEBB"/>
+      <stop offset="55%" stop-color="#F5CF67"/>
+      <stop offset="100%" stop-color="#C89020"/>
+    </radialGradient>
+    <mask id="orbiter_v15_app_icon-o-outer-mask">
+      <rect x="-150" y="-150" width="300" height="300" fill="black"/>
+      <circle cx="-18" cy="8" r="82" fill="white"/>
+      <circle cx="-18" cy="8" r="56" fill="black"/>
+    </mask>
+    <mask id="orbiter_v15_app_icon-o-inner-mask">
+      <rect x="-150" y="-150" width="300" height="300" fill="black"/>
+      <circle cx="-18" cy="8" r="34" fill="white"/>
+      <circle cx="-18" cy="8" r="22" fill="black"/>
+    </mask>
+    <mask id="orbiter_v15_app_icon-center-mask">
+      <rect x="-150" y="-150" width="300" height="300" fill="black"/>
+      <circle cx="-18" cy="8" r="10" fill="white"/>
+      <circle cx="-18" cy="8" r="3" fill="black"/>
+    </mask>
+    <mask id="orbiter_v15_app_icon-d-mask">
+      <rect x="-150" y="-150" width="300" height="300" fill="black"/>
+      <g transform="translate(70 -50)">
+        <path d="M -4,-26 C -10,-18 -10,18 -4,26 C 14,26 28,14 28,0 C 28,-14 14,-26 -4,-26 Z" fill="white"/>
+        <path d="M -2,-14 C -5,-8 -5,8 -2,14 C 8,14 16,7.5 16,0 C 16,-7.5 8,-14 -2,-14 Z" fill="black"/>
+      </g>
+    </mask>
+
+    <radialGradient id="icon-bg" cx="55%" cy="42%" r="76%">
+      <stop offset="0%" stop-color="#1C182E"/>
+      <stop offset="58%" stop-color="#121020"/>
+      <stop offset="100%" stop-color="#080610"/>
+    </radialGradient>
+    <filter id="icon-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    </defs>
+
+      <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#icon-bg)"/>
+      <circle cx="528" cy="462" r="360" fill="#1577F2" opacity=".13" filter="url(#icon-glow)"/>
+      <g transform="translate(512 532) scale(2.78)">
+
+      <circle cx="-18" cy="8" r="82" fill="url(#orbiter_v15_app_icon-o)" mask="url(#orbiter_v15_app_icon-o-outer-mask)"/>
+      <ellipse cx="-36" cy="-16" rx="16" ry="10" fill="#FFFFFF" opacity="0.16" transform="rotate(-28 -36 -16)"/>
+      <circle cx="-18" cy="8" r="34" fill="url(#orbiter_v15_app_icon-o)" opacity="0.42" mask="url(#orbiter_v15_app_icon-o-inner-mask)"/>
+      <circle cx="-18" cy="8" r="10" fill="#8FEAFF" mask="url(#orbiter_v15_app_icon-center-mask)"/>
+      <circle cx="70" cy="-50" r="0" fill="transparent"/>
+      <g transform="translate(70 -50)">
+        <path d="M -4,-26 C -10,-18 -10,18 -4,26 C 14,26 28,14 28,0 C 28,-14 14,-26 -4,-26 Z" fill="url(#orbiter_v15_app_icon-d)" mask="url(#orbiter_v15_app_icon-d-mask)"/>
+        <ellipse cx="-2" cy="-9" rx="5" ry="3" fill="#FFFFFF" opacity="0.30" transform="rotate(-25 -2 -9)"/>
+        <path d="M 0,-5.5 C 3,-5.5 6,-3 6,0 C 6,3 3,5.5 0,5.5 C -1.5,3 -1.5,-3 0,-5.5 Z" fill="#FFEEBB" opacity="0.7"/>
+      </g>
+
+      </g>
+      <rect x="1.5" y="1.5" width="1021" height="1021" rx="220" fill="none" stroke="#F5CF67" stroke-opacity=".16" stroke-width="3"/>
+
+</svg>

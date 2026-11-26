@@ -1,0 +1,24 @@
+{
+  "name": "orbiter-dev",
+  "interface": {
+    "displayName": "Orbiter Dev Official Plugins"
+  },
+  "plugins": [
+    {
+      "name": "orbiter-dev",
+      "displayName": "Orbiter Dev",
+      "description": "One-tap human sign-off on iOS and Android with Face ID and Android biometrics before AI agents take real-world action.",
+      "source": {
+        "source": "local",
+        "path": "./plugins/orbiter-dev"
+      },
+      "repository": "https://github.com/orbiterdev-ai/codex-plugin",
+      "homepage": "https://orbiterdev.ai/setup",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Security"
+    }
+  ]
+}
