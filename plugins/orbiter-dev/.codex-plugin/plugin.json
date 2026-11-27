@@ -4,6 +4,7 @@
   "description": "One-tap human sign-off on iOS and Android with Face ID and Android biometrics before AI agents take real-world action.",
   "author": {
     "name": "Orbiter Dev",
+    "email": "support@orbiterdev.ai",
     "url": "https://orbiterdev.ai"
   },
   "homepage": "https://orbiterdev.ai/setup",
@@ -27,7 +28,7 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Orbiter Dev",
-    "shortDescription": "One-tap mobile biometric approvals for AI agents",
+    "shortDescription": "Mobile sign-off for AI agents",
     "longDescription": "Adds deterministic pre-execution hooks and hosted OAuth 2.1 MCP tools so OpenAI Codex and ChatGPT agents route high-risk shell, database, cloud, and sensitive file actions to your phone on iOS and Android for Face ID or Android biometric confirmation before execution.",
     "developerName": "Orbiter Dev",
     "category": "Security",
@@ -46,6 +47,7 @@
     ],
     "brandColor": "#1577F2",
     "composerIcon": "./assets/logo.png",
-    "logo": "./assets/logo.png"
+    "logo": "./assets/logo.png",
+    "supportURL": "https://orbiterdev.ai/support"
   }
 }

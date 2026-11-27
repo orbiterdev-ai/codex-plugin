@@ -29,9 +29,9 @@ After installation, review and trust the bundled Orbiter Dev hooks in Codex (**S
 hooks = true
 ```
 
-### Option 2: OpenAI Developer Plugins Dashboard (ZIP Upload)
+### Option 2: OpenAI Universal Plugin Directory (ChatGPT + Codex)
 
-Upload the packaged `orbiterdev-ai-codex-plugin.zip` archive directly in the OpenAI Developer Plugins Dashboard. The bundle ships with root `plugin.json`, `.codex-plugin/plugin.json`, `mcp.json`, `hooks/hooks.json`, `skills/orbiter-approvals/SKILL.md`, and `assets/logo.png` / `assets/logo.svg`.
+OpenAI's public directory uploader (`https://platform.openai.com/plugins`) accepts Skills + Hosted Remote MCP packages without local lifecycle hooks. Use the dedicated `orbiterdev-ai-codex-plugin-openai-directory-*.zip` release artifact for OpenAI directory submission, or install via Option 1 (Git Marketplace) in Codex CLI/Desktop when you also want deterministic local pre-execution hooks (`hooks/hooks.json`).
 
 ### Option 3: Local Stdio MCP Fallback
 
@@ -88,6 +88,21 @@ Requires Node.js 18 or newer with zero external packages:
 node --check hooks/orbiter-codex-hook.cjs
 node --test tests/e2e_codex_plugin.test.js
 ```
+
+## Orbiter Dev Official Plugin Ecosystem
+
+All four official Orbiter Dev agent plugins share the same zero-dependency fail-closed security engine, Hosted OAuth 2.1 MCP endpoint (`https://mcp.orbiterdev.ai/mcp`), SHA-pinned CI and CodeQL v4 verification, and dual-OS mobile biometric sign-off (iOS Face ID and Android biometrics):
+
+| Platform | Official Plugin Repository |
+| :--- | :--- |
+| **Claude Code** | [orbiterdev-ai/claude-code-plugin](https://github.com/orbiterdev-ai/claude-code-plugin) |
+| **Cursor 3** | [orbiterdev-ai/cursor-plugin](https://github.com/orbiterdev-ai/cursor-plugin) |
+| **OpenAI Codex & ChatGPT** | [orbiterdev-ai/codex-plugin](https://github.com/orbiterdev-ai/codex-plugin) |
+| **Google Antigravity** | [orbiterdev-ai/antigravity-plugin](https://github.com/orbiterdev-ai/antigravity-plugin) |
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for enterprise hardening controls and vulnerability reporting.
 
 ## License
 

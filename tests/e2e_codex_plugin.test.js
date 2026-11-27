@@ -261,6 +261,18 @@ test('1. Manifests, marketplace catalog, mirror parity, ci.yml, mcp.json, hooks.
   assert.match(ciYaml, /sha256sum -c -/);
   assert.match(ciYaml, /\/tmp\/gitleaks git --no-banner --redact/);
   assert.match(ciYaml, /\/tmp\/gitleaks dir --no-banner --redact/);
+  assert.ok(rootManifest.interface.shortDescription.length <= 30, 'shortDescription must fit OpenAI 30-char directory limit');
+  assert.equal(rootManifest.interface.supportURL, 'https://orbiterdev.ai/support');
+
+  // CodeQL v4 workflow exists and pins every action to a 40-char commit SHA
+  const codeqlYaml = fs.readFileSync(path.join(PLUGIN_ROOT, '.github', 'workflows', 'codeql.yml'), 'utf8');
+  const codeqlUses = [...codeqlYaml.matchAll(/uses:\s*([^\s#]+)/g)].map((m) => m[1]);
+  assert.ok(codeqlUses.length >= 3, 'codeql.yml must pin all action invocations');
+  for (const ref of codeqlUses) {
+    assert.match(ref, /^[^@]+@[0-9a-f]{40}$/, `CodeQL action ref must be pinned to 40-char commit SHA: ${ref}`);
+  }
+  assert.match(codeqlYaml, /github\/codeql-action\/init@915412ff23e8b7659517e607487dbeae018f2934/);
+  assert.match(codeqlYaml, /github\/codeql-action\/analyze@915412ff23e8b7659517e607487dbeae018f2934/);
 
   // Hosted Remote MCP configuration validation
   const serverCfg = mcpConfig.mcpServers['orbiter-dev'];

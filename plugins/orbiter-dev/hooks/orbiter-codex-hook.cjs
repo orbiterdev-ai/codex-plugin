@@ -36,6 +36,7 @@ const DEFAULT_POLL_INTERVAL_MS = 2000;
 const SETUP_URL = 'https://orbiterdev.ai/setup';
 const MAX_STDIN_BYTES = 2 * 1024 * 1024;
 const MAX_JSON_DEPTH = 64;
+const MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
@@ -139,6 +140,8 @@ const INFRA_WRITE_PATH_PATTERNS = [
   /(?:^|[\\/])migrations?[\\/]/i,
   /(?:^|[\\/])hooks[\\/].*hook\.cjs(?=$|[\s"'`])/i,
   /(?:^|[\\/])\.git(?:[\\/]|$)/i,
+  /\.tf(?:\s|$|["'])/i,
+  /Dockerfile(?:\s|$|["'])/i,
 ];
 
 const CRITICAL_PATTERNS = [
@@ -1931,7 +1934,10 @@ function loadCredentialFile(env) {
 
   for (const filePath of candidates) {
     try {
-      if (!fs.existsSync(filePath)) continue;
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CREDENTIAL_FILE_BYTES) {
+        continue;
+      }
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       const token = isRecord(parsed)
         ? (typeof parsed.api_key === 'string' && parsed.api_key.trim())
